@@ -8,6 +8,42 @@ import { LandLib } from "../../src/libraries/LandLib.sol";
 contract StakingVaultTest is TestBase {
     bytes32 propertyId;
 
+    function setUp() public override {
+        super.setUp();
+
+        // Fund the bonus pool before tests (CRITICAL for new system)
+        // Fund with enough for all tests
+        vm.startPrank(owner);
+        usdc.approve(address(stakingVault), 1_000_000e6);
+        stakingVault.fundBonusPool(1_000_000e6); // 1M USDC bonus pool
+        vm.stopPrank();
+    }
+
+    function test_FundBonusPool() public {
+        uint256 fundAmount = 100_000e6;
+        uint256 poolBefore = stakingVault.bonusPool();
+
+        vm.startPrank(owner);
+        usdc.approve(address(stakingVault), fundAmount);
+        stakingVault.fundBonusPool(fundAmount);
+        vm.stopPrank();
+
+        assertEq(stakingVault.bonusPool(), poolBefore + fundAmount);
+    }
+
+    function test_RevertWhen_FundBonusPoolWithZero() public {
+        vm.startPrank(owner);
+        vm.expectRevert();
+        stakingVault.fundBonusPool(0);
+        vm.stopPrank();
+    }
+
+    function test_GetBonusPoolStatus() public {
+        (uint256 available, uint256 totalPaid) = stakingVault.getBonusPoolStatus();
+        assertGt(available, 0); // Should have balance from setUp
+        assertEq(totalPaid, 0); // No bonuses paid yet
+    }
+
     function test_DepositStake() public {
         uint256 stakeAmount = MIN_STAKE;
 
@@ -38,15 +74,23 @@ contract StakingVaultTest is TestBase {
         vm.stopPrank();
 
         uint256 ownerBalanceBefore = usdc.balanceOf(landowner);
+        uint256 bonusPoolBefore = stakingVault.bonusPool();
 
         // Release with bonus (approved=true)
         vm.prank(address(landRegistry));
         stakingVault.releaseStake(landowner, stakeAmount, true);
 
-        // Should get stake + 2% bonus
-        uint256 expectedBalance = ownerBalanceBefore + stakeAmount + (stakeAmount * 2 / 100);
+        // Should get stake + 2% bonus (from bonus pool)
+        uint256 bonus = stakeAmount * 2 / 100;
+        uint256 expectedBalance = ownerBalanceBefore + stakeAmount + bonus;
         assertUSDCBalance(landowner, expectedBalance);
         assertEq(stakingVault.stakes(landowner), 0);
+
+        // Bonus pool should be reduced
+        assertEq(stakingVault.bonusPool(), bonusPoolBefore - bonus);
+
+        // Verify totalBonusPaid tracking
+        assertEq(stakingVault.totalBonusPaid(), bonus);
     }
 
     function test_ReleaseStake_WithFee() public {
@@ -58,7 +102,7 @@ contract StakingVaultTest is TestBase {
         vm.stopPrank();
 
         uint256 ownerBalanceBefore = usdc.balanceOf(landowner);
-        uint256 treasuryBalanceBefore = usdc.balanceOf(treasury);
+        uint256 bonusPoolBefore = stakingVault.bonusPool();
 
         // Release with fee (approved=false)
         vm.prank(address(landRegistry));
@@ -69,8 +113,8 @@ contract StakingVaultTest is TestBase {
         uint256 expectedOwnerBalance = ownerBalanceBefore + stakeAmount - fee;
         assertUSDCBalance(landowner, expectedOwnerBalance);
 
-        // Treasury should receive the fee
-        assertUSDCBalance(treasury, treasuryBalanceBefore + fee);
+        // Fee should go to bonus pool (auto-replenish)
+        assertEq(stakingVault.bonusPool(), bonusPoolBefore + fee);
         assertEq(stakingVault.stakes(landowner), 0);
     }
 
@@ -83,13 +127,18 @@ contract StakingVaultTest is TestBase {
         vm.stopPrank();
 
         uint256 treasuryBalanceBefore = usdc.balanceOf(treasury);
+        uint256 bonusPoolBefore = stakingVault.bonusPool();
 
         // Slash stake
         vm.prank(address(landRegistry));
         stakingVault.slashStake(landowner, stakeAmount);
 
-        // All stake should go to treasury
-        assertUSDCBalance(treasury, treasuryBalanceBefore + stakeAmount);
+        // 50% to bonus pool, 50% to treasury
+        uint256 toBonus = stakeAmount / 2;
+        uint256 toTreasury = stakeAmount - toBonus;
+
+        assertUSDCBalance(treasury, treasuryBalanceBefore + toTreasury);
+        assertEq(stakingVault.bonusPool(), bonusPoolBefore + toBonus);
         assertEq(stakingVault.stakes(landowner), 0);
     }
 
@@ -191,36 +240,52 @@ contract StakingVaultTest is TestBase {
         assertEq(stakingVault.stakes(landowner), totalStake - releaseAmount);
     }
 
-    function test_TreasuryReceivesBonusAndFees() public {
-        uint256 treasuryBalanceStart = usdc.balanceOf(treasury);
-        uint256 vaultBalanceStart = usdc.balanceOf(address(stakingVault));
-
-        // Scenario 1: Approved property (vault pays 2% bonus from its funds)
-        vm.startPrank(landowner);
-        usdc.approve(address(stakingVault), MIN_STAKE * 2);
-        stakingVault.depositStake(MIN_STAKE);
+    function test_RevertWhen_InsufficientBonusPool() public {
+        // Create a new vault with no bonus pool
+        vm.startPrank(owner);
+        address newVault = address(
+            deployStakingVault(address(usdc), address(landRegistry), treasury)
+        );
         vm.stopPrank();
 
+        // Deposit stake
+        vm.startPrank(landowner);
+        usdc.approve(newVault, MIN_STAKE);
+        IStakingVault(newVault).depositStake(MIN_STAKE);
+        vm.stopPrank();
+
+        // Try to release with bonus but pool is empty
         vm.prank(address(landRegistry));
-        stakingVault.releaseStake(landowner, MIN_STAKE, true);
+        vm.expectRevert(); // Should revert with InsufficientBonusPool
+        IStakingVault(newVault).releaseStake(landowner, MIN_STAKE, true);
+    }
 
-        uint256 bonus = MIN_STAKE * 2 / 100;
-        // Vault pays bonus from its own funds, not treasury
-        assertUSDCBalance(address(stakingVault), vaultBalanceStart - bonus);
+    function test_BonusPoolAutoReplenishFromRejectionsAndSlashes() public {
+        uint256 initialPool = stakingVault.bonusPool();
 
-        // Scenario 2: Rejected property (treasury receives 1% fee)
+        // Scenario 1: Rejection adds 1% to pool
         vm.startPrank(landowner);
+        usdc.approve(address(stakingVault), MIN_STAKE * 3);
         stakingVault.depositStake(MIN_STAKE);
         vm.stopPrank();
-
-        uint256 treasuryBalanceBefore = usdc.balanceOf(treasury);
 
         vm.prank(address(landRegistry));
         stakingVault.releaseStake(landowner, MIN_STAKE, false);
 
-        uint256 fee = MIN_STAKE * 1 / 100;
-        // Treasury should receive the fee
-        assertUSDCBalance(treasury, treasuryBalanceBefore + fee);
+        uint256 rejectionFee = MIN_STAKE * 1 / 100;
+        assertEq(stakingVault.bonusPool(), initialPool + rejectionFee);
+
+        // Scenario 2: Slash adds 50% to pool
+        vm.startPrank(landowner);
+        stakingVault.depositStake(MIN_STAKE);
+        vm.stopPrank();
+
+        uint256 poolBeforeSlash = stakingVault.bonusPool();
+        vm.prank(address(landRegistry));
+        stakingVault.slashStake(landowner, MIN_STAKE);
+
+        uint256 slashToPool = MIN_STAKE / 2;
+        assertEq(stakingVault.bonusPool(), poolBeforeSlash + slashToPool);
     }
 
     function test_GetStakeBalance() public {
@@ -233,4 +298,27 @@ contract StakingVaultTest is TestBase {
 
         assertEq(stakingVault.stakes(landowner), MIN_STAKE);
     }
+
+    function test_EmergencyWithdrawBonusPool() public {
+        uint256 withdrawAmount = 100_000e6;
+        uint256 poolBefore = stakingVault.bonusPool();
+        uint256 treasuryBefore = usdc.balanceOf(treasury);
+
+        vm.prank(owner);
+        stakingVault.emergencyWithdrawBonusPool(withdrawAmount);
+
+        assertEq(stakingVault.bonusPool(), poolBefore - withdrawAmount);
+        assertUSDCBalance(treasury, treasuryBefore + withdrawAmount);
+    }
+
+    function test_RevertWhen_EmergencyWithdrawBonusPoolTooMuch() public {
+        uint256 poolBalance = stakingVault.bonusPool();
+
+        vm.prank(owner);
+        vm.expectRevert(); // InsufficientBonusPool
+        stakingVault.emergencyWithdrawBonusPool(poolBalance + 1);
+    }
 }
+
+// Helper to import IStakingVault interface
+import { IStakingVault } from "../../src/interfaces/IStakingVault.sol";
