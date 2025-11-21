@@ -132,8 +132,5 @@ All deployments log component addresses (registry, vault, factory, markets, orac
 
 - `PROTOCOL.md` – detailed lifecycle, actor responsibilities, and safety rails.
 - `TOKENOMICS.md` – supply math, staking game theory, treasury flows, and numerical examples.
-- `CONTRACT_SUMMARY.md` – quick reference of every Solidity module and build status.
-- `rwa-sc.md` – architecture deep-dive with diagrams, scripts, and testing strategy.
-- `STATUS.md` – current implementation / audit readiness checklist.
 
 Questions or contributions? Open an issue, submit a PR (use Conventional Commits), or reach out to the maintainers. Happy tokenizing! 🚜
