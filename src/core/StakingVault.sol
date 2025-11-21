@@ -26,6 +26,10 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     mapping(address => uint256) public stakes;
     mapping(address => uint256) public stakeTimestamp;
 
+    // Bonus pool tracking (separate from stakes)
+    uint256 public bonusPool; // Treasury-funded bonus pool
+    uint256 public totalBonusPaid; // Track total bonuses paid out
+
     // Constants
     uint256 public constant VERIFICATION_PERIOD = 72 hours;
     uint256 public constant BONUS_PERCENTAGE = 2; // 2% bonus on approval
@@ -40,6 +44,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     error OnlyRegistry();
     error InsufficientStake(uint256 available, uint256 required);
     error TooEarlyToWithdraw(uint256 availableAt, uint256 currentTime);
+    error InsufficientBonusPool(uint256 required, uint256 available);
 
     // Modifiers
     modifier onlyRegistry() {
@@ -80,6 +85,21 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Fund the bonus pool (callable by treasury/owner)
+     * @param amount Amount of USDC to add to bonus pool
+     * @dev Rejection fees and slashes automatically replenish this pool
+     */
+    function fundBonusPool(uint256 amount) external onlyOwner nonReentrant {
+        ValidationLib.validateNonZero(amount);
+
+        bonusPool += amount;
+
+        STAKE_TOKEN.safeTransferFrom(msg.sender, address(this), amount);
+
+        emit BonusPoolFunded(msg.sender, amount, bonusPool);
+    }
+
+    /**
      * @notice Release stake after verification (only callable by LandRegistry)
      * @param owner Property owner
      * @param amount Stake amount to release
@@ -97,9 +117,17 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         uint256 returnAmount;
 
         if (approved) {
-            // Add 2% bonus for approved property
+            // Add 2% bonus for approved property (comes from bonus pool)
             uint256 bonus = (amount * BONUS_PERCENTAGE) / 100;
+
+            // Ensure bonus pool has sufficient funds
+            if (bonusPool < bonus) {
+                revert InsufficientBonusPool(bonus, bonusPool);
+            }
+
             returnAmount = amount + bonus;
+            bonusPool -= bonus; // Deduct from bonus pool
+            totalBonusPaid += bonus;
             totalReturned += returnAmount;
 
             emit StakeReleased(owner, returnAmount, true);
@@ -108,9 +136,9 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
             uint256 fee = (amount * REJECT_FEE) / 100;
             returnAmount = amount - fee;
 
-            // Transfer fee to treasury
+            // Add rejection fee to bonus pool (auto-replenishes)
             if (fee > 0) {
-                STAKE_TOKEN.safeTransfer(treasury, fee);
+                bonusPool += fee;
             }
 
             emit StakeReleased(owner, returnAmount, false);
@@ -136,8 +164,15 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         stakes[owner] -= amount;
         totalSlashed += amount;
 
-        // Transfer slashed funds to treasury
-        STAKE_TOKEN.safeTransfer(treasury, amount);
+        // Split slashed funds: 50% to bonus pool, 50% to treasury
+        uint256 toBonus = amount / 2;
+        uint256 toTreasury = amount - toBonus;
+
+        bonusPool += toBonus;
+
+        if (toTreasury > 0) {
+            STAKE_TOKEN.safeTransfer(treasury, toTreasury);
+        }
 
         emit StakeSlashed(owner, amount);
     }
@@ -182,5 +217,30 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
      */
     function getTotalBalance() external view returns (uint256) {
         return STAKE_TOKEN.balanceOf(address(this));
+    }
+
+    /**
+     * @notice Get bonus pool status
+     * @return available Available bonus funds
+     * @return totalPaid Total bonuses paid historically
+     */
+    function getBonusPoolStatus() external view returns (uint256 available, uint256 totalPaid) {
+        return (bonusPool, totalBonusPaid);
+    }
+
+    /**
+     * @notice Emergency withdraw from bonus pool (owner only)
+     * @param amount Amount to withdraw
+     * @dev Only for emergency situations, should not be used in normal operations
+     */
+    function emergencyWithdrawBonusPool(uint256 amount) external onlyOwner nonReentrant {
+        ValidationLib.validateNonZero(amount);
+
+        if (amount > bonusPool) {
+            revert InsufficientBonusPool(amount, bonusPool);
+        }
+
+        bonusPool -= amount;
+        STAKE_TOKEN.safeTransfer(treasury, amount);
     }
 }

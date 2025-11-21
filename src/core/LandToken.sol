@@ -3,6 +3,9 @@ pragma solidity ^0.8.20;
 
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import { ERC20Votes } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
+import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import { Nonces } from "@openzeppelin/contracts/utils/Nonces.sol";
 import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { ILandToken } from "../interfaces/ILandToken.sol";
@@ -12,9 +15,9 @@ import { ValidationLib } from "../libraries/ValidationLib.sol";
 /**
  * @title LandToken
  * @notice ERC20 token representing fractional ownership of a specific property
- * @dev Each property gets its own ERC20 token with transfer restrictions
+ * @dev Each property gets its own ERC20 token with transfer restrictions and voting capabilities
  */
-contract LandToken is ERC20, ERC20Burnable, Pausable, Ownable, ILandToken {
+contract LandToken is ERC20, ERC20Burnable, ERC20Votes, Pausable, Ownable, ILandToken {
     using ValidationLib for *;
 
     // Immutable data
@@ -75,9 +78,11 @@ contract LandToken is ERC20, ERC20Burnable, Pausable, Ownable, ILandToken {
      * @param name_ Token name
      * @param symbol_ Token symbol
      * @param _landRegistry Address of LandRegistry contract
+     * @param _propertyId Property ID
      */
     constructor(string memory name_, string memory symbol_, address _landRegistry, bytes32 _propertyId)
         ERC20(name_, symbol_)
+        EIP712(name_, "1")
         Ownable(msg.sender)
     {
         ValidationLib.validateAddress(_landRegistry);
@@ -197,12 +202,12 @@ contract LandToken is ERC20, ERC20Burnable, Pausable, Ownable, ILandToken {
     }
 
     /**
-     * @notice Override transfer to enforce restrictions
+     * @notice Override transfer to enforce restrictions and update voting checkpoints
      * @param from Sender address
      * @param to Recipient address
      * @param amount Amount to transfer
      */
-    function _update(address from, address to, uint256 amount) internal override whenNotPaused {
+    function _update(address from, address to, uint256 amount) internal override(ERC20, ERC20Votes) whenNotPaused {
         // Allow minting and burning
         if (from == address(0) || to == address(0)) {
             super._update(from, to, amount);
@@ -219,16 +224,29 @@ contract LandToken is ERC20, ERC20Burnable, Pausable, Ownable, ILandToken {
             uint256 unlockTime = deploymentTimestamp + OWNER_LOCK_PERIOD;
 
             if (block.timestamp < unlockTime) {
-                // Owner can only transfer excess beyond their minimum allocation
+                // Owner must maintain at least 51% of TOTAL supply (not just their allocation)
+                // This prevents bypassing lock by selling down to exact allocation amount
                 uint256 balanceAfter = balanceOf(originalOwner) - amount;
+                uint256 currentTotalSupply = totalSupply();
+                uint256 minimumRequired = (currentTotalSupply * 51) / 100;
 
-                if (balanceAfter < ownerAllocation) {
-                    revert OwnerLockActive(unlockTime);
+                // Use the higher of: calculated minimum or original allocation
+                uint256 enforcedMinimum = minimumRequired > ownerAllocation ? minimumRequired : ownerAllocation;
+
+                if (balanceAfter < enforcedMinimum) {
+                    revert BelowMinimumOwnership(enforcedMinimum, balanceAfter);
                 }
             }
         }
 
         super._update(from, to, amount);
+    }
+
+    /**
+     * @notice Override nonces function required by ERC20Votes
+     */
+    function nonces(address owner) public view virtual override(ERC20Votes, Nonces) returns (uint256) {
+        return super.nonces(owner);
     }
 
     /**

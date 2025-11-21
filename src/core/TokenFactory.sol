@@ -27,12 +27,15 @@ contract TokenFactory is ITokenFactory, Ownable {
 
     // Tracking
     mapping(bytes32 => address) public propertyToToken;
+    mapping(address => bool) public isFactoryToken; // Track tokens created by this factory
     address[] private _allTokens;
 
     // Errors
     error OnlyRegistry();
     error TokenAlreadyExists(bytes32 propertyId, address existingToken);
     error InvalidTokenPrice();
+    error TokenNotFromFactory(address token);
+    error InsufficientFactoryBalance(uint256 available, uint256 required);
 
     // Modifiers
     modifier onlyRegistry() {
@@ -103,6 +106,7 @@ contract TokenFactory is ITokenFactory, Ownable {
 
         // Track token
         propertyToToken[propertyId] = tokenAddress;
+        isFactoryToken[tokenAddress] = true; // Mark as factory-created
         _allTokens.push(tokenAddress);
 
         emit TokenCreated(tokenAddress, propertyId, owner, allocation.totalSupply);
@@ -115,11 +119,23 @@ contract TokenFactory is ITokenFactory, Ownable {
      * @param tokenAddress Token to transfer
      * @param primaryMarket Address of primary market
      * @param amount Amount to transfer
+     * @dev Only works with tokens created by this factory
      */
     function transferToPrimaryMarket(address tokenAddress, address primaryMarket, uint256 amount) external onlyOwner {
         ValidationLib.validateAddress(tokenAddress);
         ValidationLib.validateAddress(primaryMarket);
         ValidationLib.validateNonZero(amount);
+
+        // Verify token was created by this factory
+        if (!isFactoryToken[tokenAddress]) {
+            revert TokenNotFromFactory(tokenAddress);
+        }
+
+        // Verify we have sufficient balance
+        uint256 balance = ILandToken(tokenAddress).balanceOf(address(this));
+        if (balance < amount) {
+            revert InsufficientFactoryBalance(balance, amount);
+        }
 
         ILandToken(tokenAddress).transfer(primaryMarket, amount);
     }

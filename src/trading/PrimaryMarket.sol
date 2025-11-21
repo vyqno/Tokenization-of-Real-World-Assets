@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { ILandToken } from "../interfaces/ILandToken.sol";
 import { ILandRegistry } from "../interfaces/ILandRegistry.sol";
@@ -13,9 +14,9 @@ import { MathLib } from "../libraries/MathLib.sol";
 /**
  * @title PrimaryMarket
  * @notice Initial token sale for newly created land tokens
- * @dev Manages fixed-price sales before DEX listing
+ * @dev Manages fixed-price sales before DEX listing with emergency pause capability
  */
-contract PrimaryMarket is Ownable, ReentrancyGuard {
+contract PrimaryMarket is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using ValidationLib for *;
     using MathLib for *;
@@ -119,7 +120,7 @@ contract PrimaryMarket is Ownable, ReentrancyGuard {
      * @param tokenAddress Address of token to buy
      * @param amount Amount of tokens to buy
      */
-    function buyTokens(address tokenAddress, uint256 amount) external nonReentrant {
+    function buyTokens(address tokenAddress, uint256 amount) external nonReentrant whenNotPaused {
         Sale storage sale = sales[tokenAddress];
 
         // Validate sale
@@ -267,5 +268,21 @@ contract PrimaryMarket is Ownable, ReentrancyGuard {
         if (alreadyPurchased >= maxPurchase) return 0;
 
         return maxPurchase - alreadyPurchased;
+    }
+
+    /**
+     * @notice Pause the primary market (emergency only)
+     * @dev Prevents new token purchases
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice Unpause the primary market
+     * @dev Resumes normal operations
+     */
+    function unpause() external onlyOwner {
+        _unpause();
     }
 }
