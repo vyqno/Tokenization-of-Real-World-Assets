@@ -116,6 +116,18 @@ contract DeployCore is Script {
         landRegistry.addVerifier(address(agencyMultisig));
         console.log("  Configuration complete");
 
+        // 9. Fund Bonus Pool (CRITICAL for v2.0)
+        console.log("\n9. Funding StakingVault Bonus Pool...");
+        console.log("  ⚠️  IMPORTANT: Bonus pool must be funded for approvals to work!");
+        console.log("  💡 Recommended: Fund with 10-20% of expected approval volume");
+        console.log("  Example command:");
+        console.log("  cast send <STAKING_VAULT> 'fundBonusPool(uint256)' <AMOUNT> --rpc-url <NETWORK>");
+        console.log("");
+        console.log("  For testing, you can fund now if you have USDC...");
+        // NOTE: In production, treasury should fund this separately with proper approval
+        // For testnet/local, could add funding here if deployer has USDC
+        console.log("  Bonus pool funding: SKIPPED (fund manually via treasury)");
+
         vm.stopBroadcast();
 
         // Print summary
@@ -129,6 +141,13 @@ contract DeployCore is Script {
         console.log("LiquidityBootstrap:", address(liquidityBootstrap));
         console.log("PriceOracle:", address(priceOracle));
         console.log("AgencyMultisig:", address(agencyMultisig));
+        console.log("=================================");
+        console.log("");
+        console.log("⚠️  POST-DEPLOYMENT CHECKLIST:");
+        console.log("1. Fund StakingVault bonus pool (CRITICAL!)");
+        console.log("2. Configure AgencyMultisig signers if needed");
+        console.log("3. Test full tokenization flow on testnet");
+        console.log("4. Verify all contracts on block explorer");
         console.log("=================================");
 
         // Save deployment addresses to file

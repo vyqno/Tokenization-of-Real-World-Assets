@@ -360,4 +360,123 @@ contract PrimaryMarketTest is TestBase {
 //
 //        console.log("Sale sold out: 100% of tokens sold");
 //    }
+
+    // ============ Pause/Unpause Tests ============
+
+    function test_PauseMarket() public {
+        startSaleWithApproval();
+
+        // Owner pauses the market
+        vm.prank(owner);
+        primaryMarket.pause();
+
+        // Verify market is paused - purchases should fail
+        uint256 buyAmount = 1000e18;
+        uint256 payment = (buyAmount * pricePerToken) / 1e18;
+
+        vm.startPrank(buyer1);
+        usdc.approve(address(primaryMarket), payment);
+        vm.expectRevert(); // Should revert whenNotPaused
+        primaryMarket.buyTokens(tokenAddress, buyAmount);
+        vm.stopPrank();
+    }
+
+    function test_UnpauseMarket() public {
+        startSaleWithApproval();
+
+        // Pause
+        vm.prank(owner);
+        primaryMarket.pause();
+
+        // Unpause
+        vm.prank(owner);
+        primaryMarket.unpause();
+
+        // Should be able to buy now
+        uint256 buyAmount = 1000e18;
+        uint256 payment = (buyAmount * pricePerToken) / 1e18;
+
+        vm.startPrank(buyer1);
+        usdc.approve(address(primaryMarket), payment);
+        primaryMarket.buyTokens(tokenAddress, buyAmount);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(buyer1), buyAmount);
+    }
+
+    function test_RevertWhen_NonOwnerPauses() public {
+        vm.prank(buyer1);
+        vm.expectRevert(); // Ownable: caller is not the owner
+        primaryMarket.pause();
+    }
+
+    function test_RevertWhen_NonOwnerUnpauses() public {
+        vm.prank(owner);
+        primaryMarket.pause();
+
+        vm.prank(buyer1);
+        vm.expectRevert(); // Ownable: caller is not the owner
+        primaryMarket.unpause();
+    }
+
+    function test_PauseDoesNotAffectFinalization() public {
+        startSaleWithApproval();
+
+        // Buy some tokens
+        uint256 buyAmount = 1000e18;
+        uint256 payment = (buyAmount * pricePerToken) / 1e18;
+
+        vm.startPrank(buyer1);
+        usdc.approve(address(primaryMarket), payment);
+        primaryMarket.buyTokens(tokenAddress, buyAmount);
+        vm.stopPrank();
+
+        // Pause market
+        vm.prank(owner);
+        primaryMarket.pause();
+
+        // Fast forward past sale period
+        vm.warp(block.timestamp + 72 hours + 1);
+
+        // Finalization should still work (not affected by pause)
+        vm.prank(owner);
+        primaryMarket.finalizeSale(tokenAddress);
+
+        assertFalse(primaryMarket.isSaleActive(tokenAddress));
+    }
+
+    function test_EmergencyPauseScenario() public {
+        startSaleWithApproval();
+
+        // Buyer 1 makes purchase
+        uint256 buyAmount = 5000e18;
+        uint256 payment = (buyAmount * pricePerToken) / 1e18;
+
+        vm.startPrank(buyer1);
+        usdc.approve(address(primaryMarket), payment);
+        primaryMarket.buyTokens(tokenAddress, buyAmount);
+        vm.stopPrank();
+
+        // Emergency detected - pause immediately
+        vm.prank(owner);
+        primaryMarket.pause();
+
+        // Other buyers cannot purchase during pause
+        vm.startPrank(buyer2);
+        usdc.approve(address(primaryMarket), payment);
+        vm.expectRevert();
+        primaryMarket.buyTokens(tokenAddress, buyAmount);
+        vm.stopPrank();
+
+        // After emergency resolved - unpause
+        vm.prank(owner);
+        primaryMarket.unpause();
+
+        // Trading resumes normally
+        vm.startPrank(buyer2);
+        primaryMarket.buyTokens(tokenAddress, buyAmount);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(buyer2), buyAmount);
+    }
 }
