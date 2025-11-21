@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IVotes } from "@openzeppelin/contracts/governance/utils/IVotes.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { ValidationLib } from "../libraries/ValidationLib.sol";
 import { MathLib } from "../libraries/MathLib.sol";
@@ -54,18 +55,20 @@ contract LandGovernor is ReentrancyGuard {
         uint256 againstVotes;
         uint256 startBlock;
         uint256 endBlock;
+        uint256 executionETA; // Execution time (after timelock)
         ProposalState state;
         mapping(address => bool) hasVoted;
-        mapping(address => uint256) votingPower; // Snapshot of voting power
     }
 
     // Proposal tracking
     mapping(uint256 => Proposal) public proposals;
     uint256 public proposalCount;
 
-    // Governance parameters
+    // Governance parameters (adjustable for realistic values)
     uint256 public constant VOTING_PERIOD = 50_400; // ~7 days on Polygon (2s blocks)
-    uint256 public constant QUORUM = 75; // 75% of total supply
+    uint256 public constant VOTING_DELAY = 1; // 1 block delay before voting starts
+    uint256 public constant EXECUTION_DELAY = 172_800; // 4 days timelock (~2s blocks)
+    uint256 public constant QUORUM = 20; // 20% of total supply (more realistic)
     uint256 public constant PROPOSAL_THRESHOLD = 1; // 1% to propose
 
     // Events
@@ -87,6 +90,8 @@ contract LandGovernor is ReentrancyGuard {
     error AlreadyVoted(uint256 proposalId);
     error ProposalNotSucceeded(uint256 proposalId, ProposalState state);
     error QuorumNotReached(uint256 required, uint256 actual);
+    error TimelockNotExpired(uint256 eta, uint256 currentTime);
+    error VotingNotStarted(uint256 proposalId, uint256 startBlock, uint256 currentBlock);
 
     /**
      * @notice Constructor
@@ -106,16 +111,19 @@ contract LandGovernor is ReentrancyGuard {
     function propose(string memory description, ProposalType proposalType) external returns (uint256 proposalId) {
         ValidationLib.validateNonEmptyString(description);
 
-        // Check proposer has enough tokens (1% of supply)
-        uint256 proposerBalance = IERC20(LAND_TOKEN).balanceOf(msg.sender);
+        // Check proposer has enough voting power (1% of supply at current block)
+        uint256 proposerVotes = IVotes(LAND_TOKEN).getVotes(msg.sender);
         uint256 totalSupply = IERC20(LAND_TOKEN).totalSupply();
         uint256 threshold = (totalSupply * PROPOSAL_THRESHOLD) / 100;
 
-        if (proposerBalance < threshold) {
-            revert InsufficientVotingPower(threshold, proposerBalance);
+        if (proposerVotes < threshold) {
+            revert InsufficientVotingPower(threshold, proposerVotes);
         }
 
         proposalId = ++proposalCount;
+
+        uint256 startBlock = block.number + VOTING_DELAY;
+        uint256 endBlock = startBlock + VOTING_PERIOD;
 
         Proposal storage newProposal = proposals[proposalId];
         newProposal.id = proposalId;
@@ -124,13 +132,12 @@ contract LandGovernor is ReentrancyGuard {
         newProposal.proposalType = proposalType;
         newProposal.forVotes = 0;
         newProposal.againstVotes = 0;
-        newProposal.startBlock = block.number;
-        newProposal.endBlock = block.number + VOTING_PERIOD;
-        newProposal.state = ProposalState.Active;
+        newProposal.startBlock = startBlock;
+        newProposal.endBlock = endBlock;
+        newProposal.executionETA = 0; // Set when proposal succeeds
+        newProposal.state = ProposalState.Pending;
 
-        emit ProposalCreated(
-            proposalId, msg.sender, description, proposalType, newProposal.startBlock, newProposal.endBlock
-        );
+        emit ProposalCreated(proposalId, msg.sender, description, proposalType, startBlock, endBlock);
 
         return proposalId;
     }
@@ -143,7 +150,16 @@ contract LandGovernor is ReentrancyGuard {
     function vote(uint256 proposalId, bool support) external nonReentrant {
         Proposal storage proposal = proposals[proposalId];
 
-        // Check voting is active
+        // Activate proposal if it's still pending and voting has started
+        if (proposal.state == ProposalState.Pending && block.number >= proposal.startBlock) {
+            proposal.state = ProposalState.Active;
+        }
+
+        // Check voting period
+        if (block.number < proposal.startBlock) {
+            revert VotingNotStarted(proposalId, proposal.startBlock, block.number);
+        }
+
         if (proposal.state != ProposalState.Active) {
             revert VotingNotActive(proposalId, proposal.state);
         }
@@ -157,13 +173,12 @@ contract LandGovernor is ReentrancyGuard {
             revert AlreadyVoted(proposalId);
         }
 
-        // Get voting power (current token balance)
-        uint256 votes = IERC20(LAND_TOKEN).balanceOf(msg.sender);
+        // Get voting power at proposal start block (snapshot)
+        uint256 votes = IVotes(LAND_TOKEN).getPastVotes(msg.sender, proposal.startBlock);
         ValidationLib.validateNonZero(votes);
 
         // Record vote
         proposal.hasVoted[msg.sender] = true;
-        proposal.votingPower[msg.sender] = votes;
 
         if (support) {
             proposal.forVotes += votes;
@@ -175,10 +190,10 @@ contract LandGovernor is ReentrancyGuard {
     }
 
     /**
-     * @notice Execute a successful proposal
-     * @param proposalId Proposal to execute
+     * @notice Queue a successful proposal (sets timelock)
+     * @param proposalId Proposal to queue
      */
-    function execute(uint256 proposalId) external nonReentrant {
+    function queue(uint256 proposalId) external {
         Proposal storage proposal = proposals[proposalId];
 
         // Check voting has ended
@@ -194,6 +209,27 @@ contract LandGovernor is ReentrancyGuard {
         // Check proposal succeeded
         if (proposal.state != ProposalState.Succeeded) {
             revert ProposalNotSucceeded(proposalId, proposal.state);
+        }
+
+        // Set execution ETA (timelock)
+        proposal.executionETA = block.number + EXECUTION_DELAY;
+    }
+
+    /**
+     * @notice Execute a successful proposal after timelock
+     * @param proposalId Proposal to execute
+     */
+    function execute(uint256 proposalId) external nonReentrant {
+        Proposal storage proposal = proposals[proposalId];
+
+        // Check proposal is in succeeded state
+        if (proposal.state != ProposalState.Succeeded) {
+            revert ProposalNotSucceeded(proposalId, proposal.state);
+        }
+
+        // Check timelock has expired
+        if (proposal.executionETA == 0 || block.number < proposal.executionETA) {
+            revert TimelockNotExpired(proposal.executionETA, block.number);
         }
 
         proposal.state = ProposalState.Executed;
@@ -300,13 +336,15 @@ contract LandGovernor is ReentrancyGuard {
     }
 
     /**
-     * @notice Get voting power used by address on proposal
+     * @notice Get voting power for address at proposal snapshot
      * @param proposalId Proposal ID
      * @param voter Voter address
-     * @return uint256 Voting power used
+     * @return uint256 Voting power at snapshot
      */
     function getVotingPower(uint256 proposalId, address voter) external view returns (uint256) {
-        return proposals[proposalId].votingPower[voter];
+        Proposal storage proposal = proposals[proposalId];
+        if (proposal.startBlock == 0) return 0;
+        return IVotes(LAND_TOKEN).getPastVotes(voter, proposal.startBlock);
     }
 
     /**

@@ -12,9 +12,12 @@ interface IStakingVault {
     event StakeSlashed(address indexed owner, uint256 amount);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event EmergencyWithdrawal(address indexed owner, uint256 amount);
+    event BonusPoolFunded(address indexed funder, uint256 amount, uint256 newTotal);
 
     // Functions
     function depositStake(uint256 amount) external;
+
+    function fundBonusPool(uint256 amount) external;
 
     function releaseStake(address owner, uint256 amount, bool approved) external;
 
@@ -26,11 +29,17 @@ interface IStakingVault {
 
     function stakeTimestamp(address owner) external view returns (uint256);
 
+    function bonusPool() external view returns (uint256);
+
+    function totalBonusPaid() external view returns (uint256);
+
     function totalStaked() external view returns (uint256);
 
     function totalSlashed() external view returns (uint256);
 
     function totalReturned() external view returns (uint256);
+
+    function getBonusPoolStatus() external view returns (uint256 available, uint256 totalPaid);
 
     function setTreasury(address newTreasury) external;
 }

@@ -31,7 +31,10 @@ contract AgencyMultisig is ReentrancyGuard {
         SlashProperty,
         PauseToken,
         AddVerifier,
-        RemoveVerifier
+        RemoveVerifier,
+        AddSigner,          // New: requires multisig
+        RemoveSigner,       // New: requires multisig
+        ChangeRequirement   // New: requires multisig
     }
 
     /**
@@ -41,7 +44,8 @@ contract AgencyMultisig is ReentrancyGuard {
         uint256 id;
         TransactionType txType;
         bytes32 propertyId; // For property operations
-        address targetAddress; // For verifier operations
+        address targetAddress; // For verifier operations or signer operations
+        uint256 uintData; // For requirement changes
         string data; // Additional data (e.g., evidence)
         uint256 confirmations;
         mapping(address => bool) isConfirmed;
@@ -121,15 +125,18 @@ contract AgencyMultisig is ReentrancyGuard {
      * @notice Submit a transaction for verification
      * @param txType Type of transaction
      * @param propertyId Property ID (for property operations)
-     * @param targetAddress Target address (for verifier operations)
+     * @param targetAddress Target address (for verifier/signer operations)
+     * @param uintData Uint data (for requirement changes)
      * @param data Additional data
      * @return txId Transaction ID
      */
-    function submitTransaction(TransactionType txType, bytes32 propertyId, address targetAddress, string memory data)
-        external
-        onlySigner
-        returns (uint256 txId)
-    {
+    function submitTransaction(
+        TransactionType txType,
+        bytes32 propertyId,
+        address targetAddress,
+        uint256 uintData,
+        string memory data
+    ) external onlySigner returns (uint256 txId) {
         txId = ++transactionCount;
 
         Transaction storage newTx = transactions[txId];
@@ -137,6 +144,7 @@ contract AgencyMultisig is ReentrancyGuard {
         newTx.txType = txType;
         newTx.propertyId = propertyId;
         newTx.targetAddress = targetAddress;
+        newTx.uintData = uintData;
         newTx.data = data;
         newTx.confirmations = 0;
         newTx.executed = false;
@@ -148,6 +156,21 @@ contract AgencyMultisig is ReentrancyGuard {
         confirmTransaction(txId);
 
         return txId;
+    }
+
+    /**
+     * @notice Submit transaction with simpler parameters (backward compatible)
+     * @param txType Type of transaction
+     * @param propertyId Property ID
+     * @param targetAddress Target address
+     * @param data Additional data
+     */
+    function submitSimpleTransaction(TransactionType txType, bytes32 propertyId, address targetAddress, string memory data)
+        external
+        onlySigner
+        returns (uint256 txId)
+    {
+        return submitTransaction(txType, propertyId, targetAddress, 0, data);
     }
 
     /**
@@ -211,16 +234,22 @@ contract AgencyMultisig is ReentrancyGuard {
             landRegistry.addVerifier(transaction.targetAddress);
         } else if (transaction.txType == TransactionType.RemoveVerifier) {
             landRegistry.removeVerifier(transaction.targetAddress);
+        } else if (transaction.txType == TransactionType.AddSigner) {
+            _addSignerInternal(transaction.targetAddress);
+        } else if (transaction.txType == TransactionType.RemoveSigner) {
+            _removeSignerInternal(transaction.targetAddress);
+        } else if (transaction.txType == TransactionType.ChangeRequirement) {
+            _changeRequirementInternal(transaction.uintData);
         }
 
         emit TransactionExecuted(txId);
     }
 
     /**
-     * @notice Add a new signer (requires multisig)
+     * @notice Internal function to add a signer
      * @param newSigner Address to add
      */
-    function addSigner(address newSigner) external onlySigner {
+    function _addSignerInternal(address newSigner) private {
         ValidationLib.validateAddress(newSigner);
 
         if (isSigner[newSigner]) return;
@@ -232,10 +261,10 @@ contract AgencyMultisig is ReentrancyGuard {
     }
 
     /**
-     * @notice Remove a signer (requires multisig)
+     * @notice Internal function to remove a signer
      * @param signer Address to remove
      */
-    function removeSigner(address signer) external onlySigner {
+    function _removeSignerInternal(address signer) private {
         if (!isSigner[signer]) return;
 
         isSigner[signer] = false;
@@ -259,15 +288,42 @@ contract AgencyMultisig is ReentrancyGuard {
     }
 
     /**
-     * @notice Change required signatures (requires multisig)
+     * @notice Internal function to change requirement
      * @param _required New required count
      */
-    function changeRequirement(uint256 _required) external onlySigner {
+    function _changeRequirementInternal(uint256 _required) private {
         if (_required == 0 || _required > signers.length) revert InvalidRequirement();
 
         requiredSignatures = _required;
 
         emit RequirementChanged(_required);
+    }
+
+    /**
+     * @notice Submit transaction to add a new signer (requires multisig approval)
+     * @param newSigner Address to add
+     * @return txId Transaction ID
+     */
+    function proposeAddSigner(address newSigner) external onlySigner returns (uint256 txId) {
+        return submitTransaction(TransactionType.AddSigner, bytes32(0), newSigner, 0, "Add new signer");
+    }
+
+    /**
+     * @notice Submit transaction to remove a signer (requires multisig approval)
+     * @param signer Address to remove
+     * @return txId Transaction ID
+     */
+    function proposeRemoveSigner(address signer) external onlySigner returns (uint256 txId) {
+        return submitTransaction(TransactionType.RemoveSigner, bytes32(0), signer, 0, "Remove signer");
+    }
+
+    /**
+     * @notice Submit transaction to change requirement (requires multisig approval)
+     * @param _required New required count
+     * @return txId Transaction ID
+     */
+    function proposeChangeRequirement(uint256 _required) external onlySigner returns (uint256 txId) {
+        return submitTransaction(TransactionType.ChangeRequirement, bytes32(0), address(0), _required, "Change requirement");
     }
 
     /**
@@ -277,6 +333,7 @@ contract AgencyMultisig is ReentrancyGuard {
      * @return txType Transaction type
      * @return propertyId Property ID
      * @return targetAddress Target address
+     * @return uintData Uint data
      * @return data Additional data
      * @return confirmations Confirmation count
      * @return executed Execution status
@@ -289,6 +346,7 @@ contract AgencyMultisig is ReentrancyGuard {
             TransactionType txType,
             bytes32 propertyId,
             address targetAddress,
+            uint256 uintData,
             string memory data,
             uint256 confirmations,
             bool executed
@@ -301,6 +359,7 @@ contract AgencyMultisig is ReentrancyGuard {
             transaction.txType,
             transaction.propertyId,
             transaction.targetAddress,
+            transaction.uintData,
             transaction.data,
             transaction.confirmations,
             transaction.executed
