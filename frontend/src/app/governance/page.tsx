@@ -4,13 +4,14 @@ import { useState, useEffect } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { useActiveAccount } from "thirdweb/react";
-import { prepareContractCall, sendTransaction } from "thirdweb";
+import { prepareContractCall, sendTransaction, readContract } from "thirdweb";
+import { useLandRegistryContract } from '@/hooks/useContracts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   Vote, CheckCircle, XCircle, Clock, TrendingUp, Plus, Users,
-  ThumbsUp, ThumbsDown, AlertCircle, FileText, Calendar
+  ThumbsUp, ThumbsDown, AlertCircle, FileText, Calendar, ShieldCheck
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatToken } from '@/utils/format';
@@ -32,18 +33,52 @@ interface Proposal {
 
 export default function GovernancePage() {
   const account = useActiveAccount();
+  const landRegistry = useLandRegistryContract();
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [filter, setFilter] = useState<'all' | 'active' | 'ended'>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [voting, setVoting] = useState<string | null>(null);
   const [votingPower, setVotingPower] = useState(BigInt(0));
+  const [isVerifier, setIsVerifier] = useState(false);
+  const [checkingVerifier, setCheckingVerifier] = useState(true);
 
   useEffect(() => {
     if (account) {
+      checkVerifierStatus();
       loadProposals();
       loadVotingPower();
+    } else {
+      setIsVerifier(false);
+      setCheckingVerifier(false);
     }
   }, [account]);
+
+  async function checkVerifierStatus() {
+    if (!account) {
+      setCheckingVerifier(false);
+      return;
+    }
+
+    try {
+      setCheckingVerifier(true);
+      const verifierStatus = await readContract({
+        contract: landRegistry,
+        method: "function isVerifier(address) view returns (bool)",
+        params: [account.address],
+      }) as boolean;
+
+      setIsVerifier(verifierStatus);
+
+      if (verifierStatus) {
+        toast.success('✓ Verifier access granted', { duration: 2000 });
+      }
+    } catch (error) {
+      console.error('Error checking verifier status:', error);
+      setIsVerifier(false);
+    } finally {
+      setCheckingVerifier(false);
+    }
+  }
 
   async function loadProposals() {
     try {
@@ -192,6 +227,27 @@ export default function GovernancePage() {
       <Navbar />
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 w-full">
+        {/* Verifier Badge */}
+        {isVerifier && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-lg p-4 mb-6 border border-green-200 dark:border-green-800"
+          >
+            <div className="flex items-center gap-3">
+              <ShieldCheck className="h-6 w-6 text-green-600 dark:text-green-400" />
+              <div>
+                <p className="font-semibold text-green-800 dark:text-green-200">
+                  Verifier Access Active
+                </p>
+                <p className="text-sm text-green-700 dark:text-green-300">
+                  You can approve, reject, or slash property registrations
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
