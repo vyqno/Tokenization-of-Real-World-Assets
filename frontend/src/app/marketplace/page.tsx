@@ -5,7 +5,7 @@ import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { useActiveAccount } from "thirdweb/react";
 import { readContract } from "thirdweb";
-import { useLandRegistryContract } from '@/hooks/useContracts';
+import { useLandRegistryContract, usePrimaryMarketContract } from '@/hooks/useContracts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,6 +30,7 @@ interface Property {
 export default function MarketplacePage() {
   const account = useActiveAccount();
   const landRegistry = useLandRegistryContract();
+  const primaryMarket = usePrimaryMarketContract();
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [filteredProperties, setFilteredProperties] = useState<Property[]>([]);
@@ -55,45 +56,80 @@ export default function MarketplacePage() {
     try {
       setLoading(true);
 
-      // Add demo properties for now
-      setProperties([
-        {
-          propertyId: '0x1',
-          tokenAddress: '0x123...',
-          owner: '0xabc...',
-          location: 'Downtown Manhattan, New York, NY',
-          valuation: BigInt(1500000 * 1e6),
-          area: BigInt(2500),
-          status: 2,
-          registrationTime: BigInt(Date.now() / 1000),
-          tokensSold: 45,
-          saleActive: true,
-        },
-        {
-          propertyId: '0x2',
-          tokenAddress: '0x456...',
-          owner: '0xdef...',
-          location: 'Beverly Hills, Los Angeles, CA',
-          valuation: BigInt(2800000 * 1e6),
-          area: BigInt(4200),
-          status: 2,
-          registrationTime: BigInt(Date.now() / 1000 - 86400),
-          tokensSold: 67,
-          saleActive: true,
-        },
-        {
-          propertyId: '0x3',
-          tokenAddress: '0x789...',
-          owner: '0xghi...',
-          location: 'Miami Beach, Florida',
-          valuation: BigInt(950000 * 1e6),
-          area: BigInt(1800),
-          status: 1,
-          registrationTime: BigInt(Date.now() / 1000 - 172800),
-        },
-      ]);
+      // Get all token addresses from LandRegistry
+      const tokens = await readContract({
+        contract: landRegistry,
+        method: "function getAllTokens() view returns (address[])",
+        params: [],
+      }) as string[];
 
-      toast.success('Properties loaded');
+      console.log('Found tokens:', tokens);
+
+      if (tokens.length === 0) {
+        setProperties([]);
+        setLoading(false);
+        return;
+      }
+
+      // Load property data for each token
+      const loadedProperties: Property[] = [];
+
+      for (const tokenAddress of tokens) {
+        try {
+          // Get property ID from token address mapping
+          const propertyId = await readContract({
+            contract: landRegistry,
+            method: "function tokenToProperty(address) view returns (bytes32)",
+            params: [tokenAddress],
+          }) as string;
+
+          // Get property details
+          const propertyData = await readContract({
+            contract: landRegistry,
+            method: "function properties(bytes32) view returns (address owner, tuple(string location, uint256 valuation, uint256 area, string legalDescription, string ownerName, string coordinates) metadata, uint8 status, address tokenAddress, uint256 registrationTime, uint256 verificationTime, uint256 stakeAmount)",
+            params: [propertyId],
+          }) as any;
+
+          // Get sale info from PrimaryMarket
+          let saleInfo: any = null;
+          let tokensSoldPercent = 0;
+          let saleActive = false;
+
+          try {
+            saleInfo = await readContract({
+              contract: primaryMarket,
+              method: "function sales(address) view returns (address tokenAddress, uint256 tokensForSale, uint256 tokensSold, uint256 pricePerToken, uint256 startTime, uint256 endTime, address beneficiary, bool active, bool finalized)",
+              params: [tokenAddress],
+            }) as any;
+
+            if (saleInfo && saleInfo.active) {
+              saleActive = true;
+              tokensSoldPercent = Number((BigInt(saleInfo.tokensSold) * BigInt(100)) / BigInt(saleInfo.tokensForSale));
+            }
+          } catch (e) {
+            // Sale might not exist
+            console.log('No sale data for', tokenAddress);
+          }
+
+          loadedProperties.push({
+            propertyId,
+            tokenAddress,
+            owner: propertyData.owner,
+            location: propertyData.metadata.location,
+            valuation: BigInt(propertyData.metadata.valuation),
+            area: BigInt(propertyData.metadata.area),
+            status: propertyData.status,
+            registrationTime: BigInt(propertyData.registrationTime),
+            tokensSold: tokensSoldPercent,
+            saleActive,
+          });
+        } catch (error) {
+          console.error('Error loading property:', tokenAddress, error);
+        }
+      }
+
+      setProperties(loadedProperties);
+      toast.success(`Loaded ${loadedProperties.length} properties`);
     } catch (error: any) {
       console.error('Error loading properties:', error);
       toast.error('Failed to load properties');

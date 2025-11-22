@@ -4,6 +4,11 @@ import { useState, useEffect } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { useActiveAccount } from "thirdweb/react";
+import { readContract, getContract } from "thirdweb";
+import { useLandRegistryContract, usePrimaryMarketContract, useLandTokenContract } from '@/hooks/useContracts';
+import { client } from "@/lib/thirdweb";
+import { ACTIVE_CHAIN, CONTRACT_ADDRESSES, TOKEN_PRICE } from "@/lib/config";
+import LandTokenABI from "@/contracts/abis/LandToken.json";
 import { motion } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +46,8 @@ const COLORS = ['#0ea5e9', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981'];
 
 export default function PortfolioPage() {
   const account = useActiveAccount();
+  const landRegistry = useLandRegistryContract();
+  const primaryMarket = usePrimaryMarketContract();
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,62 +61,98 @@ export default function PortfolioPage() {
   }, [account]);
 
   async function loadPortfolioData() {
+    if (!account) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
-      // Demo data - replace with actual contract calls
-      const demoHoldings: Holding[] = [
-        {
-          propertyId: '0x1',
-          tokenAddress: '0x123...',
-          location: 'Downtown Manhattan, NY',
-          tokensHeld: BigInt(5000 * 1e18),
-          currentValue: BigInt(52500 * 1e6),
-          purchaseValue: BigInt(50000 * 1e6),
-          change24h: 2.5,
-        },
-        {
-          propertyId: '0x2',
-          tokenAddress: '0x456...',
-          location: 'Beverly Hills, CA',
-          tokensHeld: BigInt(3000 * 1e18),
-          currentValue: BigInt(31200 * 1e6),
-          purchaseValue: BigInt(30000 * 1e6),
-          change24h: 1.8,
-        },
-      ];
+      // Get all token addresses
+      const tokens = await readContract({
+        contract: landRegistry,
+        method: "function getAllTokens() view returns (address[])",
+        params: [],
+      }) as string[];
 
-      const demoTransactions: Transaction[] = [
-        {
-          id: '1',
-          type: 'buy',
-          property: 'Downtown Manhattan, NY',
-          amount: BigInt(5000 * 1e18),
-          value: BigInt(50000 * 1e6),
-          timestamp: Date.now() / 1000 - 86400 * 7,
-        },
-        {
-          id: '2',
-          type: 'buy',
-          property: 'Beverly Hills, CA',
-          amount: BigInt(3000 * 1e18),
-          value: BigInt(30000 * 1e6),
-          timestamp: Date.now() / 1000 - 86400 * 3,
-        },
-        {
-          id: '3',
-          type: 'reward',
-          property: 'Downtown Manhattan, NY',
-          amount: BigInt(250 * 1e18),
-          value: BigInt(2500 * 1e6),
-          timestamp: Date.now() / 1000 - 86400,
-        },
-      ];
+      const userHoldings: Holding[] = [];
+      const userTransactions: Transaction[] = [];
 
-      setHoldings(demoHoldings);
-      setTransactions(demoTransactions);
+      // Check each token for user's balance
+      for (const tokenAddress of tokens) {
+        try {
+          // Get token contract
+          const tokenContract = getContract({
+            client,
+            chain: ACTIVE_CHAIN,
+            address: tokenAddress,
+            abi: LandTokenABI,
+          });
 
-      const total = demoHoldings.reduce((sum, h) => sum + h.currentValue, BigInt(0));
-      const invested = demoHoldings.reduce((sum, h) => sum + h.purchaseValue, BigInt(0));
+          // Get user's balance
+          const balance = await readContract({
+            contract: tokenContract,
+            method: "function balanceOf(address) view returns (uint256)",
+            params: [account.address],
+          }) as bigint;
+
+          if (balance > BigInt(0)) {
+            // User holds this token - get property details
+            const propertyId = await readContract({
+              contract: landRegistry,
+              method: "function tokenToProperty(address) view returns (bytes32)",
+              params: [tokenAddress],
+            }) as string;
+
+            const propertyData = await readContract({
+              contract: landRegistry,
+              method: "function properties(bytes32) view returns (address owner, tuple(string location, uint256 valuation, uint256 area, string legalDescription, string ownerName, string coordinates) metadata, uint8 status, address tokenAddress, uint256 registrationTime, uint256 verificationTime, uint256 stakeAmount)",
+              params: [propertyId],
+            }) as any;
+
+            // Get purchase amount
+            const purchased = await readContract({
+              contract: primaryMarket,
+              method: "function purchases(address, address) view returns (uint256)",
+              params: [tokenAddress, account.address],
+            }) as bigint;
+
+            // Calculate values
+            const currentValue = (balance * BigInt(TOKEN_PRICE * 1e6)) / BigInt(1e18);
+            const purchaseValue = (purchased * BigInt(TOKEN_PRICE * 1e6)) / BigInt(1e18);
+
+            userHoldings.push({
+              propertyId,
+              tokenAddress,
+              location: propertyData.metadata.location,
+              tokensHeld: balance,
+              currentValue,
+              purchaseValue,
+              change24h: 0, // Would need price history for this
+            });
+
+            // Add buy transaction
+            if (purchased > BigInt(0)) {
+              userTransactions.push({
+                id: `buy-${tokenAddress}`,
+                type: 'buy',
+                property: propertyData.metadata.location,
+                amount: purchased,
+                value: purchaseValue,
+                timestamp: Number(propertyData.registrationTime),
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error loading holding for', tokenAddress, error);
+        }
+      }
+
+      setHoldings(userHoldings);
+      setTransactions(userTransactions);
+
+      const total = userHoldings.reduce((sum, h) => sum + h.currentValue, BigInt(0));
+      const invested = userHoldings.reduce((sum, h) => sum + h.purchaseValue, BigInt(0));
       setTotalValue(total);
       setTotalInvested(invested);
     } catch (error) {
