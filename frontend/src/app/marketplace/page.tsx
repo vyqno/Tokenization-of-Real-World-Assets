@@ -1,150 +1,282 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
-import { useAccount, useReadContract } from 'wagmi';
-import { contractAddresses } from '@/lib/contracts';
-import LandRegistryABI from '@/contracts/abis/LandRegistry.json';
-import { MapPin, TrendingUp, Clock, Building2 } from 'lucide-react';
+import { useActiveAccount } from "thirdweb/react";
+import { readContract } from "thirdweb";
+import { useLandRegistryContract } from '@/hooks/useContracts';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Search, Filter, MapPin, TrendingUp, Building2, DollarSign, Calendar } from 'lucide-react';
 import Link from 'next/link';
+import { formatUSDC } from '@/utils/format';
+import { toast } from 'sonner';
+
+interface Property {
+  propertyId: string;
+  tokenAddress: string;
+  owner: string;
+  location: string;
+  valuation: bigint;
+  area: bigint;
+  status: number;
+  registrationTime: bigint;
+  tokensSold?: number;
+  saleActive?: boolean;
+}
 
 export default function MarketplacePage() {
-  const { isConnected } = useAccount();
-  const [filter, setFilter] = useState<'all' | 'active' | 'verified' | 'pending'>('all');
+  const account = useActiveAccount();
+  const landRegistry = useLandRegistryContract();
 
-  // Read all tokens from registry
-  const { data: allTokens, isLoading } = useReadContract({
-    address: contractAddresses.landRegistry,
-    abi: LandRegistryABI,
-    functionName: 'getAllTokens',
-  });
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [filteredProperties, setFilteredProperties] = useState<Property[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'newest' | 'valuation' | 'area'>('newest');
+
+  useEffect(() => {
+    loadProperties();
+  }, [account]);
+
+  useEffect(() => {
+    filterAndSortProperties();
+  }, [properties, searchTerm, statusFilter, sortBy]);
+
+  async function loadProperties() {
+    if (!account) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // Add demo properties for now
+      setProperties([
+        {
+          propertyId: '0x1',
+          tokenAddress: '0x123...',
+          owner: '0xabc...',
+          location: 'Downtown Manhattan, New York, NY',
+          valuation: BigInt(1500000 * 1e6),
+          area: BigInt(2500),
+          status: 2,
+          registrationTime: BigInt(Date.now() / 1000),
+          tokensSold: 45,
+          saleActive: true,
+        },
+        {
+          propertyId: '0x2',
+          tokenAddress: '0x456...',
+          owner: '0xdef...',
+          location: 'Beverly Hills, Los Angeles, CA',
+          valuation: BigInt(2800000 * 1e6),
+          area: BigInt(4200),
+          status: 2,
+          registrationTime: BigInt(Date.now() / 1000 - 86400),
+          tokensSold: 67,
+          saleActive: true,
+        },
+        {
+          propertyId: '0x3',
+          tokenAddress: '0x789...',
+          owner: '0xghi...',
+          location: 'Miami Beach, Florida',
+          valuation: BigInt(950000 * 1e6),
+          area: BigInt(1800),
+          status: 1,
+          registrationTime: BigInt(Date.now() / 1000 - 172800),
+        },
+      ]);
+
+      toast.success('Properties loaded');
+    } catch (error: any) {
+      console.error('Error loading properties:', error);
+      toast.error('Failed to load properties');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function filterAndSortProperties() {
+    let filtered = [...properties];
+
+    if (searchTerm) {
+      filtered = filtered.filter(p =>
+        p.location.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    if (statusFilter !== 'all') {
+      const statusMap: { [key: string]: number } = {
+        'pending': 1,
+        'verified': 2,
+        'active': 2,
+      };
+      filtered = filtered.filter(p => p.status === statusMap[statusFilter]);
+    }
+
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'newest':
+          return Number(b.registrationTime - a.registrationTime);
+        case 'valuation':
+          return Number(b.valuation - a.valuation);
+        case 'area':
+          return Number(b.area - a.area);
+        default:
+          return 0;
+      }
+    });
+
+    setFilteredProperties(filtered);
+  }
+
+  const getStatusBadge = (status: number) => {
+    const badges = {
+      1: { text: 'Pending', class: 'bg-yellow-100 text-yellow-800' },
+      2: { text: 'Verified', class: 'bg-green-100 text-green-800' },
+      3: { text: 'Rejected', class: 'bg-red-100 text-red-800' },
+      5: { text: 'Tokenized', class: 'bg-blue-100 text-blue-800' },
+    };
+    return badges[status as keyof typeof badges] || { text: 'Unknown', class: 'bg-gray-100 text-gray-800' };
+  };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-gray-50">
       <Navbar />
 
-      <main className="flex-1 bg-gray-50 py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold mb-2">Property Marketplace</h1>
+      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 w-full">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8"
+        >
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+            Property Marketplace
+          </h1>
+          <p className="text-gray-600">
+            Browse and invest in tokenized real-world assets
+          </p>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="bg-white rounded-lg shadow-sm p-6 mb-8"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="md:col-span-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
+                <input
+                  type="text"
+                  placeholder="Search by location..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                <option value="all">All Status</option>
+                <option value="pending">Pending</option>
+                <option value="verified">Verified</option>
+                <option value="active">Active Sale</option>
+              </select>
+            </div>
+
+            <div>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                <option value="newest">Newest First</option>
+                <option value="valuation">Highest Value</option>
+                <option value="area">Largest Area</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center gap-4 text-sm text-gray-600">
+            <span className="flex items-center gap-2">
+              <Filter className="h-4 w-4" />
+              {filteredProperties.length} properties found
+            </span>
+          </div>
+        </motion.div>
+
+        {!account ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="bg-white rounded-lg shadow-sm p-12 text-center"
+          >
+            <Building2 className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold mb-2">Connect Your Wallet</h3>
             <p className="text-gray-600">
-              Browse and invest in tokenized real-world assets
+              Please connect your wallet to view available properties
             </p>
+          </motion.div>
+        ) : loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <Card key={i} className="animate-pulse">
+                <div className="h-48 bg-gradient-to-br from-gray-200 to-gray-300 rounded-t-lg"></div>
+                <CardHeader>
+                  <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                  <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="h-3 bg-gray-200 rounded"></div>
+                    <div className="h-3 bg-gray-200 rounded w-5/6"></div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
-
-          {/* Filters */}
-          <div className="bg-white rounded-lg shadow-sm p-4 mb-8">
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => setFilter('all')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
-                  filter === 'all'
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                All Properties
-              </button>
-              <button
-                onClick={() => setFilter('active')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
-                  filter === 'active'
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Active Sales
-              </button>
-              <button
-                onClick={() => setFilter('verified')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
-                  filter === 'verified'
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Verified
-              </button>
-              <button
-                onClick={() => setFilter('pending')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
-                  filter === 'pending'
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Pending Verification
-              </button>
-            </div>
+        ) : filteredProperties.length === 0 ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="bg-white rounded-lg shadow-sm p-12 text-center"
+          >
+            <Building2 className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold mb-2">No Properties Found</h3>
+            <p className="text-gray-600 mb-6">
+              Try adjusting your filters or search terms
+            </p>
+            <Button onClick={() => { setSearchTerm(''); setStatusFilter('all'); }}>
+              Clear Filters
+            </Button>
+          </motion.div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <AnimatePresence>
+              {filteredProperties.map((property, index) => (
+                <PropertyCard
+                  key={property.propertyId}
+                  property={property}
+                  index={index}
+                  statusBadge={getStatusBadge(property.status)}
+                />
+              ))}
+            </AnimatePresence>
           </div>
-
-          {/* Property Grid */}
-          {isLoading ? (
-            <div className="text-center py-12">
-              <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-              <p className="mt-4 text-gray-600">Loading properties...</p>
-            </div>
-          ) : !isConnected ? (
-            <div className="bg-white rounded-lg shadow-sm p-12 text-center">
-              <Building2 className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold mb-2">Connect Your Wallet</h3>
-              <p className="text-gray-600 mb-6">
-                Please connect your wallet to view available properties
-              </p>
-            </div>
-          ) : !allTokens || (allTokens as any[]).length === 0 ? (
-            <div className="bg-white rounded-lg shadow-sm p-12 text-center">
-              <Building2 className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold mb-2">No Properties Yet</h3>
-              <p className="text-gray-600 mb-6">
-                Be the first to tokenize a property on our platform
-              </p>
-              <Link
-                href="/register"
-                className="inline-block bg-primary-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-primary-700 transition"
-              >
-                Register Property
-              </Link>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {/* Example Property Card - In production, map over allTokens */}
-              <PropertyCard
-                name="Downtown Commercial Property"
-                location="123 Main St, New York, NY"
-                valuation="$1,500,000"
-                tokenPrice="10 USDC"
-                status="active"
-                endTime={new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)}
-                area="2,500 sq m"
-                tokensSold={35}
-              />
-
-              <PropertyCard
-                name="Suburban Residential Land"
-                location="456 Oak Ave, Los Angeles, CA"
-                valuation="$850,000"
-                tokenPrice="10 USDC"
-                status="verified"
-                endTime={new Date(Date.now() + 5 * 24 * 60 * 60 * 1000)}
-                area="1,800 sq m"
-                tokensSold={22}
-              />
-
-              <PropertyCard
-                name="Industrial Warehouse"
-                location="789 Industrial Pkwy, Chicago, IL"
-                valuation="$2,200,000"
-                tokenPrice="10 USDC"
-                status="pending"
-                endTime={new Date(Date.now() + 1 * 24 * 60 * 60 * 1000)}
-                area="5,000 sq m"
-                tokensSold={18}
-              />
-            </div>
-          )}
-        </div>
+        )}
       </main>
 
       <Footer />
@@ -153,97 +285,110 @@ export default function MarketplacePage() {
 }
 
 interface PropertyCardProps {
-  name: string;
-  location: string;
-  valuation: string;
-  tokenPrice: string;
-  status: 'active' | 'verified' | 'pending';
-  endTime: Date;
-  area: string;
-  tokensSold: number;
+  property: Property;
+  index: number;
+  statusBadge: { text: string; class: string };
 }
 
-function PropertyCard({
-  name,
-  location,
-  valuation,
-  tokenPrice,
-  status,
-  endTime,
-  area,
-  tokensSold,
-}: PropertyCardProps) {
-  const getStatusBadge = () => {
-    switch (status) {
-      case 'active':
-        return <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">Active Sale</span>;
-      case 'verified':
-        return <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">Verified</span>;
-      case 'pending':
-        return <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-medium">Pending</span>;
-    }
-  };
-
+function PropertyCard({ property, index, statusBadge }: PropertyCardProps) {
   return (
-    <div className="bg-white rounded-lg shadow-sm hover:shadow-xl transition-shadow overflow-hidden card-hover">
-      <div className="h-48 bg-gradient-to-br from-primary-400 to-primary-600"></div>
-
-      <div className="p-6">
-        <div className="flex justify-between items-start mb-3">
-          <h3 className="text-xl font-bold">{name}</h3>
-          {getStatusBadge()}
-        </div>
-
-        <div className="space-y-3 mb-4">
-          <div className="flex items-center text-gray-600">
-            <MapPin className="h-4 w-4 mr-2 flex-shrink-0" />
-            <span className="text-sm">{location}</span>
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      transition={{ delay: index * 0.05 }}
+      whileHover={{ y: -8 }}
+      className="group"
+    >
+      <Link href={`/property/${property.propertyId}`}>
+        <Card className="overflow-hidden cursor-pointer transition-shadow hover:shadow-2xl">
+          <div className="h-48 bg-gradient-to-br from-primary-400 via-primary-500 to-primary-600 relative overflow-hidden">
+            <motion.div
+              className="absolute inset-0 bg-black/20"
+              whileHover={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+            />
+            <div className="absolute top-4 right-4">
+              <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusBadge.class}`}>
+                {statusBadge.text}
+              </span>
+            </div>
+            {property.saleActive && (
+              <div className="absolute top-4 left-4">
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-green-500 text-white flex items-center gap-1">
+                  <TrendingUp className="h-3 w-3" />
+                  Active Sale
+                </span>
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center text-gray-600">
-            <Building2 className="h-4 w-4 mr-2 flex-shrink-0" />
-            <span className="text-sm">{area}</span>
-          </div>
+          <CardHeader>
+            <CardTitle className="text-xl group-hover:text-primary-600 transition">
+              {property.location.split(',')[0]}
+            </CardTitle>
+            <CardDescription className="flex items-center gap-1">
+              <MapPin className="h-3 w-3" />
+              {property.location}
+            </CardDescription>
+          </CardHeader>
 
-          <div className="flex items-center text-gray-600">
-            <Clock className="h-4 w-4 mr-2 flex-shrink-0" />
-            <span className="text-sm">
-              Ends: {endTime.toLocaleDateString()}
-            </span>
-          </div>
-        </div>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600 flex items-center gap-1">
+                  <DollarSign className="h-4 w-4" />
+                  Valuation
+                </span>
+                <span className="font-semibold text-gray-900">
+                  {formatUSDC(property.valuation)}
+                </span>
+              </div>
 
-        <div className="border-t pt-4 space-y-2">
-          <div className="flex justify-between">
-            <span className="text-gray-600">Valuation</span>
-            <span className="font-semibold">{valuation}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Token Price</span>
-            <span className="font-semibold">{tokenPrice}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Sold</span>
-            <span className="font-semibold">{tokensSold}%</span>
-          </div>
-        </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600 flex items-center gap-1">
+                  <Building2 className="h-4 w-4" />
+                  Area
+                </span>
+                <span className="font-semibold text-gray-900">
+                  {property.area.toString()} m²
+                </span>
+              </div>
 
-        <div className="mt-4">
-          <div className="w-full bg-gray-200 rounded-full h-2 mb-4">
-            <div
-              className="bg-primary-600 h-2 rounded-full"
-              style={{ width: `${tokensSold}%` }}
-            ></div>
-          </div>
-        </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600 flex items-center gap-1">
+                  <Calendar className="h-4 w-4" />
+                  Registered
+                </span>
+                <span className="text-sm text-gray-600">
+                  {new Date(Number(property.registrationTime) * 1000).toLocaleDateString()}
+                </span>
+              </div>
 
-        <Link
-          href={`/property/${name.toLowerCase().replace(/\s+/g, '-')}`}
-          className="block w-full bg-primary-600 text-white text-center px-4 py-3 rounded-lg font-semibold hover:bg-primary-700 transition"
-        >
-          View Details
-        </Link>
-      </div>
-    </div>
+              {property.saleActive && property.tokensSold !== undefined && (
+                <div className="pt-3 border-t">
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-gray-600">Tokens Sold</span>
+                    <span className="font-semibold">{property.tokensSold}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${property.tokensSold}%` }}
+                      transition={{ duration: 1, delay: index * 0.1 }}
+                      className="bg-primary-600 h-2 rounded-full"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <Button className="w-full mt-4 group-hover:bg-primary-700 transition">
+              View Details
+            </Button>
+          </CardContent>
+        </Card>
+      </Link>
+    </motion.div>
   );
 }
