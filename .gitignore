@@ -27,4 +27,7 @@ test_results_final.txt
 # Coverage results
 coverage/
 
+# Frontend and markdown files
+frontend/
+mdfiles/
 
