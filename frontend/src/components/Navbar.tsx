@@ -6,6 +6,7 @@ import { client } from "@/lib/thirdweb";
 import { ACTIVE_CHAIN } from "@/lib/config";
 import { Building2, LayoutDashboard, ShoppingCart, Vote, TrendingUp } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
+import { MobileNav } from './MobileNav';
 
 export function Navbar() {
   return (
@@ -63,13 +64,16 @@ export function Navbar() {
 
           <div className="flex items-center gap-4">
             <ThemeToggle />
-            <ConnectButton
-              client={client}
-              chain={ACTIVE_CHAIN}
-              connectModal={{
-                size: "compact",
-              }}
-            />
+            <div className="hidden md:block">
+              <ConnectButton
+                client={client}
+                chain={ACTIVE_CHAIN}
+                connectModal={{
+                  size: "compact",
+                }}
+              />
+            </div>
+            <MobileNav />
           </div>
         </div>
       </div>
