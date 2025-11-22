@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { ConnectButton } from "thirdweb/react";
 import { client } from "@/lib/thirdweb";
 import { ACTIVE_CHAIN } from "@/lib/config";
-import { Building2, LayoutDashboard, ShoppingCart, Vote, TrendingUp } from 'lucide-react';
+import { Building2, LayoutDashboard, ShoppingCart, Vote, TrendingUp, ArrowDownUp, Droplet } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { MobileNav } from './MobileNav';
 
@@ -26,6 +26,14 @@ export function Navbar() {
               >
                 <ShoppingCart className="h-4 w-4" />
                 <span>Marketplace</span>
+              </Link>
+
+              <Link
+                href="/swap"
+                className="flex items-center space-x-1 text-gray-700 dark:text-gray-300 hover:text-primary-600 dark:hover:text-primary-400 transition"
+              >
+                <ArrowDownUp className="h-4 w-4" />
+                <span>Swap</span>
               </Link>
 
               <Link
@@ -58,6 +66,14 @@ export function Navbar() {
               >
                 <TrendingUp className="h-4 w-4" />
                 <span>Analytics</span>
+              </Link>
+
+              <Link
+                href="/liquidity"
+                className="flex items-center space-x-1 text-gray-700 dark:text-gray-300 hover:text-primary-600 dark:hover:text-primary-400 transition"
+              >
+                <Droplet className="h-4 w-4" />
+                <span>Liquidity</span>
               </Link>
             </div>
           </div>

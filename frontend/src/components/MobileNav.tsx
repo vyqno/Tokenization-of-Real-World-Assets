@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, Building2, ShoppingCart, LayoutDashboard, Vote, TrendingUp } from 'lucide-react';
+import { Menu, X, Building2, ShoppingCart, LayoutDashboard, Vote, TrendingUp, ArrowDownUp, Droplet } from 'lucide-react';
 import { Button } from './ui/button';
 
 export function MobileNav() {
@@ -11,10 +11,12 @@ export function MobileNav() {
 
   const menuItems = [
     { href: '/marketplace', label: 'Marketplace', icon: ShoppingCart },
+    { href: '/swap', label: 'Swap', icon: ArrowDownUp },
     { href: '/register', label: 'Register Property', icon: Building2 },
     { href: '/portfolio', label: 'Portfolio', icon: LayoutDashboard },
     { href: '/governance', label: 'Governance', icon: Vote },
     { href: '/analytics', label: 'Analytics', icon: TrendingUp },
+    { href: '/liquidity', label: 'Liquidity', icon: Droplet },
   ];
 
   return (
