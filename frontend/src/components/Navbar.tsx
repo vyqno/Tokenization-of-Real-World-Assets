@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { ConnectButton } from "thirdweb/react";
+import { client } from "@/lib/thirdweb";
+import { ACTIVE_CHAIN } from "@/lib/config";
 import { Building2, LayoutDashboard, ShoppingCart, Vote, TrendingUp } from 'lucide-react';
 
 export function Navbar() {
@@ -59,7 +61,13 @@ export function Navbar() {
           </div>
 
           <div className="flex items-center">
-            <ConnectButton />
+            <ConnectButton
+              client={client}
+              chain={ACTIVE_CHAIN}
+              connectModal={{
+                size: "compact",
+              }}
+            />
           </div>
         </div>
       </div>
