@@ -1,0 +1,98 @@
+[
+  {
+    "type": "function",
+    "name": "registerProperty",
+    "inputs": [
+      {
+        "name": "metadata",
+        "type": "tuple",
+        "components": [
+          { "name": "location", "type": "string" },
+          { "name": "valuation", "type": "uint256" },
+          { "name": "area", "type": "uint256" },
+          { "name": "legalDescription", "type": "string" },
+          { "name": "ownerName", "type": "string" },
+          { "name": "coordinates", "type": "string" }
+        ]
+      },
+      { "name": "stakeAmount", "type": "uint256" }
+    ],
+    "outputs": [{ "name": "propertyId", "type": "bytes32" }],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "properties",
+    "inputs": [{ "name": "propertyId", "type": "bytes32" }],
+    "outputs": [
+      { "name": "owner", "type": "address" },
+      {
+        "name": "metadata",
+        "type": "tuple",
+        "components": [
+          { "name": "location", "type": "string" },
+          { "name": "valuation", "type": "uint256" },
+          { "name": "area", "type": "uint256" },
+          { "name": "legalDescription", "type": "string" },
+          { "name": "ownerName", "type": "string" },
+          { "name": "coordinates", "type": "string" }
+        ]
+      },
+      { "name": "status", "type": "uint8" },
+      { "name": "tokenAddress", "type": "address" },
+      { "name": "registrationTime", "type": "uint256" },
+      { "name": "verificationTime", "type": "uint256" },
+      { "name": "stakeAmount", "type": "uint256" }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ownerProperties",
+    "inputs": [
+      { "name": "owner", "type": "address" },
+      { "name": "index", "type": "uint256" }
+    ],
+    "outputs": [{ "name": "", "type": "bytes32" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getAllTokens",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address[]" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "totalPropertiesRegistered",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "totalPropertiesVerified",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "PropertyRegistered",
+    "inputs": [
+      { "name": "propertyId", "type": "bytes32", "indexed": true },
+      { "name": "owner", "type": "address", "indexed": true },
+      { "name": "valuation", "type": "uint256", "indexed": false },
+      { "name": "stakeAmount", "type": "uint256", "indexed": false }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "PropertyVerified",
+    "inputs": [
+      { "name": "propertyId", "type": "bytes32", "indexed": true },
+      { "name": "verifier", "type": "address", "indexed": true }
+    ]
+  }
+]
